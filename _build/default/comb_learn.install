@@ -1,8 +1,0 @@
-lib: [
-  "_build/install/default/lib/comb_learn/META"
-  "_build/install/default/lib/comb_learn/dune-package"
-  "_build/install/default/lib/comb_learn/opam"
-]
-bin: [
-  "_build/install/default/bin/comb_learn"
-]
