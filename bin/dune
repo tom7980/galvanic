@@ -1,0 +1,4 @@
+(executable
+ (public_name comb_learn)
+ (name main)
+ (libraries comb_learn))

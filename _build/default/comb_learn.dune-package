@@ -1,0 +1,4 @@
+(lang dune 3.24)
+(name comb_learn)
+(sections (lib .) (bin ../../bin))
+(files (lib (META dune-package opam)) (bin (comb_learn)))
