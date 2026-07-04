@@ -227,7 +227,7 @@ and assign_stmt input =
 and fn_stmt input =
   (let* name = token "fn" >> ident
    and* args = token "(" >> argnames
-   and* body = token ")" >> token "{" >> end_by1 stmt (token ";") >>= fun l -> return (Stmts l)
+   and* body = token ")" >> token "{" >> option [] (end_by1 stmt (token ";")) >>= fun l -> return (Stmts l)
    and* rtrn = option Unit expr in
    token "}" >> return (FnDef(name, args, body, rtrn))) input
 
@@ -393,14 +393,12 @@ mod = 1000000007 ;
 count = 0 ;
 
 fn inc2(y) {
-  y = y + 2;
-  y
+  y + 2
 } ;
   
 fn add(x, f) {
     x = x + 1 ;
-    x = f(x);
-    x
+    f(x)
 } ;
 
 while ( cur > 0 )
