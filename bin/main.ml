@@ -88,7 +88,7 @@ let rec chainr1 x op =
 let chainr x op default = chainr1 x op <|> return default
 
 let satisfy test =
-  any >>= (fun res -> Printf.printf "Test: %c \n" res; if test res then begin Printf.printf "Matches: %c \n" res; return res end else mzero)
+  any >>= (fun res -> if test res then begin return res end else mzero)
 
 let range low high = satisfy (fun x -> low <= x && x <= high)
 
@@ -172,8 +172,6 @@ let var =
   let* s = ident in
   return (Var s)
 
-
-
 let true_p = token "true" >> return (Bool true)
 let false_p = token "false" >> return (Bool false)
 
@@ -210,7 +208,7 @@ let argnames =
 
 let rec stmts input =
   (let* l = sep_by1 stmt (token ";") in
-  return (Stmts l)) input
+   return (Stmts(l))) input
 and stmt input =
   (if_stmt <|> while_stmt <|> assign_stmt <|> fn_stmt) input
 and if_stmt input =
@@ -237,33 +235,43 @@ let program = stmts << (spaces << eof ())
 
 let parse_prog input = parse program input
 
+module Value = struct
+
+  type t =
+    | Number of int
+    | Bool of bool
+    | String of string
+    | Function of string list * stmt * expr
+    | Unit
+
+  let to_string value =
+    match value with
+    | Number x -> string_of_int x
+    | Bool x -> string_of_bool x
+    | String x -> x
+    | Function (_, _, _) -> "fn"
+    | Unit -> "Unit"
+
+end
+
 module Envir = struct
 
-  type ('a, 'b, 'c) t = {
-    vars: ('a, 'b) Hashtbl.t;
-    funcs: ('a, 'c) Hashtbl.t;
+  type t = {
+    vars: (string, Value.t) Hashtbl.t;
   }
 
   let make_env = {
     vars = Hashtbl.create 10;
-    funcs = Hashtbl.create 10;
   }
 
-  let get_var env x =
+  let get_env env x =
     Hashtbl.find env.vars x
 
-  let set_var env x value =
+  let set_env env x value =
     Hashtbl.replace env.vars x value
-
-  let push_func env x args body return =
-    Hashtbl.replace env.funcs x (body, args, return)
-
-  let get_func env x =
-    Hashtbl.find env.funcs x
 
   let make_scoped_env env = {
       vars = Hashtbl.copy env.vars;
-      funcs = Hashtbl.copy env.funcs;
     }
 end
 
@@ -281,103 +289,101 @@ let pp_expr expr =
 let rec eval env prog =
   match prog with
   | Stmts [] -> ()
-  | Stmts (x :: xs) ->
+  | Stmts (x :: xs) -> begin
     eval env x;
     eval env (Stmts xs)
-  | Assign (var, value) ->
-    let value = eval_arith env value in
-    Envir.set_var env var value
-  | If (pred, thn, els) ->
-    if (eval_bool env pred) then
-      eval env thn
-    else
-      eval env els
-  | While (guard, body) ->
+  end 
+  | Assign (var, value) -> begin
+    let r = eval_expr env value in
+    Envir.set_env env var r
+  end 
+  | If (pred, thn, els) -> begin
+    match eval_expr env pred with
+    | Bool true -> eval env thn
+    | Bool false -> eval env els
+    | _ -> raise Runtime_error
+  end 
+  | While (guard, body) -> begin
     let rec loop () =
-      if (eval_bool env guard) then
-        begin
-          eval env body;
-          loop ()
-        end
-      else ()
+      match eval_expr env guard with
+      | Bool true -> eval env body; loop ()
+      | Bool false -> ()
+      | _ -> raise Runtime_error
     in
     loop ()
-  | FnDef (name, args, body, return) ->
-    Envir.push_func env name args body return
+  end 
+  | FnDef (name, args, body, return) -> Envir.set_env env name (Function (args, body, return))
     
 and eval_func env args def_args body return =
   let scoped_env = Envir.make_scoped_env env in
-  let vals = eval_args scoped_env args in
-  List.iter2 (fun name value -> Envir.set_var scoped_env name value) def_args vals;
+  eval_args scoped_env args def_args;
   eval scoped_env body;
-  eval_arith scoped_env return
+  eval_expr scoped_env return
 
-and eval_args env expr =
-  match expr with
-  | Args (x :: xs) ->
-    let r = eval_arith env x in
-    r :: eval_args env (Args xs)
-  | Args [] ->
-    []
-  | _ ->
-    Printf.printf "Args eval: %s" (pp_expr expr);
-    raise Runtime_error
+and eval_args scoped_env args def_args =
+  match args, def_args with
+  | Args (x :: xs), y :: ys -> begin
+      match x with
+      | Var name -> begin
+          let r = Envir.get_env scoped_env name in
+          Envir.set_env scoped_env y r;
+          eval_args scoped_env (Args xs) ys
+        end
+      | _ -> raise Runtime_error
+    end 
+  | _ , _ ->
+    ()
 
 
-and eval_arith env expr =
+and eval_expr env expr =
   match expr with
   | Arith (Add, lhs, rhs) ->
-    let lhs' = eval_arith env lhs
-    and rhs' = eval_arith env rhs in
-    lhs' + rhs'
+   (match eval_expr env lhs, eval_expr env rhs with
+    | Number x, Number y -> Number ( x + y )
+    | String x, String y -> String ( x ^ y )
+    | _ -> raise Runtime_error)
   | Arith (Minus, lhs, rhs) ->
-    let lhs' = eval_arith env lhs
-    and rhs' = eval_arith env rhs in
-    lhs' - rhs'
+   (match eval_expr env lhs, eval_expr env rhs with
+    | Number x, Number y -> Number ( x - y )
+    | _ -> raise Runtime_error)
   | Arith (Mul, lhs, rhs) ->
-    let lhs' = eval_arith env lhs
-    and rhs' = eval_arith env rhs in
-    lhs' * rhs'
+   (match eval_expr env lhs, eval_expr env rhs with
+    | Number x, Number y -> Number ( x * y )
+    | _ -> raise Runtime_error)
   | Arith (Div, lhs, rhs) ->
-    let lhs' = eval_arith env lhs
-    and rhs' = eval_arith env rhs in
-    lhs' / rhs'
-  | Var x -> Envir.get_var env x
-  | Num n -> n
-  | Unit -> 0
-  | Call (name, args) -> begin
-    match Envir.get_func env name with 
-    | (body, def_args, return) -> eval_func env args def_args body return
-  end 
-  | _ -> begin
-      Printf.printf "Runtime error in eval arith\n";
-      Printf.printf "Eval expr: %s\n" (pp_expr expr);
-      raise Runtime_error
-    end
-
-and eval_bool env expr =
-  match expr with
+   (match eval_expr env lhs, eval_expr env rhs with
+    | Number x, Number y -> Number ( x / y )
+    | _ -> raise Runtime_error)
+  | Var x -> Envir.get_env env x 
+  | Num n -> Number n
+  | Unit -> Value.Unit
+  | Call (name, args) ->
+    (match Envir.get_env env name with 
+      | Function (def_args, body, return) -> eval_func env args def_args body return
+      | _ -> raise Runtime_error)
   | BoolOp (And, x, y) ->
-    let x' = eval_bool env x
-    and y' = eval_bool env y in
-    x' && y'
+    (match eval_expr env x, eval_expr env y with
+    | Number x', Number y' -> Number (x' land y')
+    | Bool x', Bool y' -> Bool (x' && y')
+    | _ -> raise Runtime_error)
   | BoolOp (Or, x, y) ->
-    let x' = eval_bool env x
-    and y' = eval_bool env y in
-    x' || y'
+    (match eval_expr env x, eval_expr env y with
+    | Number x', Number y' -> Number (x' lor y')
+    | Bool x', Bool y' -> Bool (x' || y')
+    | _ -> raise Runtime_error)
   | BoolOp (GT, x, y) ->
-    let x' = eval_arith env x
-    and y' = eval_arith env y in
-    x' > y'
+    (match eval_expr env x, eval_expr env y with
+    | Number x', Number y' -> Bool (x' > y')
+    | _ -> raise Runtime_error)
   | BoolOp (LT, x, y) ->
-    let x' = eval_arith env x
-    and y' = eval_arith env y in
-    x' < y'
-  | Bool x -> x
-  | _ -> begin
-      Printf.printf "Runtime error in eval bool\n";
-      raise Runtime_error
-    end
+    (match eval_expr env x, eval_expr env y with
+    | Number x', Number y' -> Bool (x' < y')
+    | _ -> raise Runtime_error)
+  | Bool x -> Bool x
+  | _ ->
+    (Printf.printf "Runtime error in eval expr\n";
+    Printf.printf "Eval expr: %s\n" (pp_expr expr);
+    raise Runtime_error)
 
 let in_str = "fact = 1 ;
 val = 10000 ;
@@ -386,7 +392,16 @@ mod = 1000000007 ;
 
 count = 0 ;
 
-fn add(x) { x = x + 1 ; x } ;
+fn inc2(y) {
+  y = y + 2;
+  y
+} ;
+  
+fn add(x, f) {
+    x = x + 1 ;
+    x = f(x);
+    x
+} ;
 
 while ( cur > 0 )
   do
@@ -394,7 +409,7 @@ while ( cur > 0 )
       fact = fact * cur ;
       fact = fact - fact / mod * mod ;
       cur = cur - 1 ;
-      count = add(count)
+      count = add(count, inc2)
    } ;
 
 cur = 0"
@@ -409,4 +424,4 @@ let () =
     eval env program;
     let pairs = Hashtbl.fold (fun k v acc -> (k, v) :: acc) env.vars [] in
     let pairs' = List.sort (fun (k1, _) (k2, _) -> compare k1 k2) pairs in
-    List.iter (fun (k, v) -> Printf.printf "%s %d\n" k v) pairs'
+    List.iter (fun (k, v) -> Printf.printf "%s %s\n" k (Value.to_string v)) pairs'
